@@ -94,6 +94,9 @@
 			);
 			mainGroup = EBFA79D52F33BC6300AF980D;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				EBFA7B142F363D5E00AF980D /* XCRemoteSwiftPackageReference "WhisperKit" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = EBFA79DF2F33BC6300AF980D /* Products */;
 			projectDirPath = "";
@@ -252,6 +255,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = F3RNB7LHXK;
+				"ENABLE_DEBUG_DYLIB[sdk=macosx*]" = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "FlowDoc needs camera access to capture photos and videos during sessions.";
@@ -267,12 +271,11 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
+				"MTL_ENABLE_DEBUG_INFO[sdk=macosx*]" = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = UnityProvisions.FlowDoc;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTS_MACCATALYST = YES;
-				"ENABLE_DEBUG_DYLIB[sdk=macosx*]" = NO;
-				"MTL_ENABLE_DEBUG_INFO[sdk=macosx*]" = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -290,6 +293,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = F3RNB7LHXK;
+				"ENABLE_DEBUG_DYLIB[sdk=macosx*]" = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "FlowDoc needs camera access to capture photos and videos during sessions.";
@@ -305,12 +309,11 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
+				"MTL_ENABLE_DEBUG_INFO[sdk=macosx*]" = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = UnityProvisions.FlowDoc;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTS_MACCATALYST = YES;
-				"ENABLE_DEBUG_DYLIB[sdk=macosx*]" = NO;
-				"MTL_ENABLE_DEBUG_INFO[sdk=macosx*]" = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -342,6 +345,17 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		EBFA7B142F363D5E00AF980D /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/argmaxinc/WhisperKit.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.15.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
 	};
 	rootObject = EBFA79D62F33BC6300AF980D /* Project object */;
 }

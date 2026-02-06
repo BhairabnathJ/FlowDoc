@@ -2,11 +2,10 @@ import SwiftUI
 
 struct RecordingView: View {
     @EnvironmentObject var audioRecorder: AudioRecorder
+    @ObservedObject var transcription = TranscriptionEngine.shared
     @Environment(\.colorScheme) var colorScheme
-    @Environment(\.dismiss)     var dismiss
+    @Environment(\.dismiss) var dismiss
 
-    /// Live segments – populated once WhisperKit transcription is active.
-    @State private var segments: [Segment] = []
     @State private var showCamera = false
 
     var body: some View {
@@ -19,8 +18,8 @@ struct RecordingView: View {
             ScrollView {
                 ScrollViewReader { proxy in
                     transcriptContent
-                        .onChange(of: segments.count) { _, _ in
-                            if let lastId = segments.last?.id {
+                        .onChange(of: transcription.segments.count) { _, _ in
+                            if let lastId = transcription.segments.last?.id {
                                 proxy.scrollTo(lastId, anchor: .bottom)
                             }
                         }
@@ -41,8 +40,8 @@ struct RecordingView: View {
                 sessionMenu
             }
         }
-        .onChange(of: audioRecorder.state) { _, newState in
-            if newState == .idle { dismiss() }
+        .onChange(of: audioRecorder.isRecording) { _, isRecording in
+            if !isRecording { dismiss() }
         }
         .sheet(isPresented: $showCamera) {
             if let sessionID = audioRecorder.currentSession?.id {
@@ -56,11 +55,13 @@ struct RecordingView: View {
     private var timerSection: some View {
         VStack(spacing: DesignTokens.Spacing.sm) {
             HStack(spacing: DesignTokens.Spacing.sm) {
-                if audioRecorder.state == .recording { RecordingDot() }
-                StatusBadge(status: audioRecorder.state == .recording ? .recording : .paused)
+                if audioRecorder.isRecording && !audioRecorder.isPaused {
+                    RecordingDot()
+                }
+                StatusBadge(status: audioRecorder.isPaused ? .paused : .recording)
             }
 
-            Text(audioRecorder.formattedElapsedTime)
+            Text(formatDuration(audioRecorder.duration))
                 .font(.system(size: 52, weight: .semibold).monospacedDigit())
                 .foregroundStyle(DesignTokens.Colors.textPrimary(for: colorScheme))
         }
@@ -76,32 +77,38 @@ struct RecordingView: View {
                 .font(DesignTokens.Typography.title2)
                 .foregroundStyle(DesignTokens.Colors.textPrimary(for: colorScheme))
 
-            if segments.isEmpty {
+            // Model loading state
+            if !transcription.isModelLoaded {
+                VStack(spacing: DesignTokens.Spacing.sm) {
+                    ProgressView()
+                        .tint(DesignTokens.Colors.accentPrimary(for: colorScheme))
+                    Text("Loading transcription model...")
+                        .font(DesignTokens.Typography.body)
+                        .foregroundStyle(DesignTokens.Colors.textSecondary(for: colorScheme))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, DesignTokens.Spacing.xl)
+            } else if transcription.segments.isEmpty {
                 VStack(spacing: DesignTokens.Spacing.sm) {
                     Image(systemName: "waveform")
                         .font(.system(size: 36))
                         .foregroundStyle(DesignTokens.Colors.textTertiary(for: colorScheme))
-                    Text("Transcription will appear here")
+                    Text("Start speaking to see live transcription")
                         .font(DesignTokens.Typography.body)
                         .foregroundStyle(DesignTokens.Colors.textTertiary(for: colorScheme))
-                    Text("Add WhisperKit via SPM to enable live transcription")
-                        .font(DesignTokens.Typography.small)
-                        .foregroundStyle(DesignTokens.Colors.textTertiary(for: colorScheme))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, DesignTokens.Spacing.lg)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.top, DesignTokens.Spacing.xl)
             } else {
-                ForEach(segments) { segment in
+                ForEach(transcription.segments) { segment in
                     TranscriptRow(segment: segment)
                         .id(segment.id)
                 }
             }
         }
         .padding(.horizontal, DesignTokens.Spacing.lg)
-        .padding(.top,        DesignTokens.Spacing.lg)
-        .padding(.bottom,     DesignTokens.Spacing.xxl)
+        .padding(.top, DesignTokens.Spacing.lg)
+        .padding(.bottom, DesignTokens.Spacing.xxl)
     }
 
     // MARK: – Controls
@@ -110,24 +117,24 @@ struct RecordingView: View {
         HStack(spacing: 0) {
             Spacer()
             controlButton(
-                icon:   audioRecorder.state == .recording ? "pause.circle.fill" : "play.circle.fill",
-                label:  audioRecorder.state == .recording ? "Pause"             : "Resume",
-                color:  DesignTokens.Colors.textPrimary(for: colorScheme),
+                icon: audioRecorder.isPaused ? "play.circle.fill" : "pause.circle.fill",
+                label: audioRecorder.isPaused ? "Resume" : "Pause",
+                color: DesignTokens.Colors.textPrimary(for: colorScheme),
                 action: togglePause
             )
             Spacer()
             controlButton(
-                icon:     "stop.circle.fill",
-                label:    "Stop",
-                color:    DesignTokens.Colors.stateRecording(for: colorScheme),
-                action:   { audioRecorder.stopRecording() },
+                icon: "stop.circle.fill",
+                label: "Stop",
+                color: DesignTokens.Colors.stateRecording(for: colorScheme),
+                action: { audioRecorder.stopRecording() },
                 iconSize: 36
             )
             Spacer()
             controlButton(
-                icon:   "camera.fill",
-                label:  "Photo",
-                color:  DesignTokens.Colors.textSecondary(for: colorScheme),
+                icon: "camera.fill",
+                label: "Photo",
+                color: DesignTokens.Colors.textSecondary(for: colorScheme),
                 action: { showCamera = true }
             )
             Spacer()
@@ -140,7 +147,7 @@ struct RecordingView: View {
 
     private var sessionMenu: some View {
         Menu {
-            if audioRecorder.state == .recording {
+            if audioRecorder.isRecording && !audioRecorder.isPaused {
                 Button(action: { audioRecorder.pauseRecording() }) {
                     Label("Privacy Pause", systemImage: "lock.shield")
                 }
@@ -154,9 +161,21 @@ struct RecordingView: View {
     // MARK: – Helpers
 
     private func togglePause() {
-        audioRecorder.state == .recording
-            ? audioRecorder.pauseRecording()
-            : audioRecorder.resumeRecording()
+        if audioRecorder.isPaused {
+            audioRecorder.resumeRecording()
+        } else {
+            audioRecorder.pauseRecording()
+        }
+    }
+
+    private func formatDuration(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds)
+        let h = total / 3600
+        let m = total / 60 % 60
+        let s = total % 60
+        return h > 0
+            ? String(format: "%d:%02d:%02d", h, m, s)
+            : String(format: "%d:%02d", m, s)
     }
 
     private func controlButton(icon: String, label: String, color: Color,
