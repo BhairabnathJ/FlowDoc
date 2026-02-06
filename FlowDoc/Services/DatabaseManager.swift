@@ -59,6 +59,45 @@ class DatabaseManager: ObservableObject {
             .sorted { $0.startTime < $1.startTime }
     }
 
+    // MARK: - Media Capture operations
+
+    func saveMediaCapture(_ capture: MediaCapture, for sessionID: UUID) {
+        // Media captures are stored in the Media directory, one JSON file per session
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let mediaDir = docs.appendingPathComponent("Media").appendingPathComponent(sessionID.uuidString)
+        let capturesFile = mediaDir.appendingPathComponent("captures.json")
+
+        var captures = fetchMediaCaptures(for: sessionID)
+        captures.append(capture)
+
+        do {
+            let data = try JSONEncoder().encode(captures)
+            try data.write(to: capturesFile)
+            print("Media capture saved: \(capture.id)")
+        } catch {
+            print("Failed to persist media capture: \(error)")
+        }
+    }
+
+    func fetchMediaCaptures(for sessionID: UUID) -> [MediaCapture] {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let mediaDir = docs.appendingPathComponent("Media").appendingPathComponent(sessionID.uuidString)
+        let capturesFile = mediaDir.appendingPathComponent("captures.json")
+
+        guard FileManager.default.fileExists(atPath: capturesFile.path) else {
+            return []
+        }
+
+        do {
+            let data = try Data(contentsOf: capturesFile)
+            let captures = try JSONDecoder().decode([MediaCapture].self, from: data)
+            return captures.sorted { $0.timestamp < $1.timestamp }
+        } catch {
+            print("Failed to load media captures: \(error)")
+            return []
+        }
+    }
+
     // MARK: - Disk I/O
 
     private func persistSessions() {
