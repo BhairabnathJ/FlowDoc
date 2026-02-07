@@ -2,9 +2,13 @@ import SwiftUI
 
 struct HomeView: View {
     @EnvironmentObject var audioRecorder: AudioRecorder
+    @ObservedObject private var db = DatabaseManager.shared
     @Environment(\.colorScheme) var colorScheme
     @State private var navigationPath: [FlowDocRoute] = []
-    @State private var sessions: [Session] = []
+
+    private var sessions: [Session] {
+        db.allSessions.sorted { $0.startTime > $1.startTime }
+    }
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -18,7 +22,6 @@ struct HomeView: View {
             }
         }
         .onAppear {
-            sessions = DatabaseManager.shared.fetchAllSessions()
             if audioRecorder.isRecording && !navigationPath.contains(.recording) {
                 navigationPath.append(.recording)
             }

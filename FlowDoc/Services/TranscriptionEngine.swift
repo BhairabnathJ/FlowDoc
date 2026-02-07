@@ -1,35 +1,32 @@
 import Foundation
 import Combine
-#if canImport(WhisperKit)
-import WhisperKit
-#endif
+import AVFoundation
+import Speech
 
-/// On-device transcription via WhisperKit.
-///
-/// **Setup required:** Add WhisperKit as an SPM dependency in Xcode
-///   File → Add Packages → https://github.com/argmaxinc/WhisperKit.git  (≥ 0.15.0)
-///
-/// When WhisperKit is not available, runs in stub mode generating placeholder
-/// segments every 8 seconds so the UI flow can be tested end-to-end.
+/// On-device transcription using Apple Speech framework (SFSpeechRecognizer).
+/// Falls back to stub mode if speech recognition is unavailable or denied.
 @MainActor
 class TranscriptionEngine: ObservableObject {
     static let shared = TranscriptionEngine()
 
     @Published private(set) var segments: [Segment] = []
     @Published private(set) var isModelLoaded: Bool = false
-    @Published private(set) var modelLoadProgress: Float = 0.0
+    @Published private(set) var liveText: String = ""
     @Published private(set) var lastError: String?
 
-    #if canImport(WhisperKit)
-    private var whisperKit: WhisperKit?
-    #endif
+    private nonisolated(unsafe) var speechRecognizer: SFSpeechRecognizer?
+    private nonisolated(unsafe) var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private nonisolated(unsafe) var recognitionTask: SFSpeechRecognitionTask?
+    private nonisolated(unsafe) var audioEngine: AVAudioEngine?
 
     private var sessionID: UUID?
-    private let modelName = "base.en"
+    private var sessionStartTime: Date?
+    private var lastSegmentEndTime: TimeInterval = 0
+    private var lastCommittedText: String = ""
+    private var usingSpeechFramework: Bool = false
 
-    // Stub mode properties
+    // Stub fallback
     private var stubTimer: Timer?
-    private var stubStartTime: Date?
     private var stubIndex: Int = 0
     private let stubPhrases: [String] = [
         "Starting the session, let me walk through the current setup.",
@@ -45,60 +42,58 @@ class TranscriptionEngine: ObservableObject {
     ]
 
     private init() {
-        print("TranscriptionEngine: initialised")
-        #if canImport(WhisperKit)
-        Task {
-            await loadModel()
-        }
-        #else
-        // Stub mode: mark as ready immediately
-        isModelLoaded = true
-        modelLoadProgress = 1.0
-        print("TranscriptionEngine: Running in STUB mode (WhisperKit not available)")
-        #endif
-    }
+        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
 
-    #if canImport(WhisperKit)
-    private func loadModel() async {
-        do {
-            print("TranscriptionEngine: Loading WhisperKit model '\(modelName)'...")
-            whisperKit = try await WhisperKit(
-                model: modelName,
-                computeUnits: .cpuAndNeuralEngine,
-                verbose: false
-            )
-            isModelLoaded = true
-            modelLoadProgress = 1.0
-            print("TranscriptionEngine: Model loaded successfully")
-        } catch {
-            print("TranscriptionEngine: Model load failed - \(error.localizedDescription)")
-            lastError = "Failed to load transcription model: \(error.localizedDescription)"
-            isModelLoaded = false
+        // Request authorization upfront so it's ready when recording starts
+        SFSpeechRecognizer.requestAuthorization { status in
+            Task { @MainActor in
+                self.isModelLoaded = true
+                if status == .authorized {
+                    self.usingSpeechFramework = true
+                    print("TranscriptionEngine: Speech recognition authorized (on-device)")
+                } else {
+                    self.usingSpeechFramework = false
+                    print("TranscriptionEngine: Speech not authorized (\(status.rawValue)), using stub mode")
+                }
+            }
         }
     }
-    #endif
 
-    /// Begin a new transcription session.
+    // MARK: - Public API
+
+    /// Check auth status synchronously to avoid race with async requestAuthorization
+    private func isSpeechAvailable() -> Bool {
+        let status = SFSpeechRecognizer.authorizationStatus()
+        return status == .authorized && speechRecognizer?.isAvailable == true
+    }
+
     func start(sessionID: UUID) {
         self.sessionID = sessionID
         self.segments = []
+        self.liveText = ""
+        self.lastCommittedText = ""
+        self.lastSegmentEndTime = 0
         self.stubIndex = 0
-        self.stubStartTime = Date()
-        print("TranscriptionEngine: Started session \(sessionID)")
+        self.sessionStartTime = Date()
 
-        #if !canImport(WhisperKit)
-        // Start stub timer to generate segments every 8 seconds
-        startStubTimer()
-        #endif
+        // Check auth status synchronously — don't rely on the async callback flag
+        let speechAvailable = isSpeechAvailable()
+        usingSpeechFramework = speechAvailable
+        print("TranscriptionEngine: Started session \(sessionID) [speech=\(speechAvailable)]")
+
+        if speechAvailable {
+            startLiveRecognition()
+        } else {
+            startStubTimer()
+        }
     }
 
-    /// End the current transcription session.
     func stop() {
-        print("TranscriptionEngine: Stopped session - \(segments.count) segment(s)")
-
-        #if !canImport(WhisperKit)
-        stopStubTimer()
-        #endif
+        if usingSpeechFramework {
+            stopLiveRecognition()
+        } else {
+            stopStubTimer()
+        }
 
         // Save segments to database
         if let sessionID = sessionID {
@@ -110,73 +105,195 @@ class TranscriptionEngine: ObservableObject {
         }
 
         sessionID = nil
+        sessionStartTime = nil
+        liveText = ""
+        print("TranscriptionEngine: Stopped - \(segments.count) segment(s)")
     }
 
-    /// Pause stub generation (called when recording pauses)
     func pause() {
-        #if !canImport(WhisperKit)
-        stopStubTimer()
-        #endif
+        if usingSpeechFramework {
+            stopLiveRecognition()
+        } else {
+            stopStubTimer()
+        }
     }
 
-    /// Resume stub generation (called when recording resumes)
     func resume() {
-        #if !canImport(WhisperKit)
-        startStubTimer()
-        #endif
+        if usingSpeechFramework {
+            startLiveRecognition()
+        } else {
+            startStubTimer()
+        }
     }
 
-    /// Process an audio chunk for transcription (WhisperKit mode)
     func processChunk(url: URL, offsetSeconds: TimeInterval) async {
-        #if canImport(WhisperKit)
-        guard isModelLoaded, let whisperKit = whisperKit else {
-            print("TranscriptionEngine: Model not loaded, skipping chunk")
+        // Not needed when using live recognition
+    }
+
+    // MARK: - Live Speech Recognition
+
+    private func startLiveRecognition() {
+        guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
+            print("TranscriptionEngine: Speech recognizer not available")
+            lastError = "Speech recognition unavailable"
             return
         }
 
-        guard let sessionID = sessionID else {
-            print("TranscriptionEngine: No active session, skipping chunk")
-            return
+        // Cancel any existing task
+        recognitionTask?.cancel()
+        recognitionTask = nil
+
+        let engine = AVAudioEngine()
+        self.audioEngine = engine
+
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.requiresOnDeviceRecognition = true
+        self.recognitionRequest = request
+
+        let inputNode = engine.inputNode
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
+            request.append(buffer)
         }
 
         do {
-            print("TranscriptionEngine: Transcribing chunk at offset \(offsetSeconds)s...")
-            let result = try await whisperKit.transcribe(audioPath: url.path)
-
-            guard let transcription = result?.text, !transcription.isEmpty else {
-                print("TranscriptionEngine: No text detected in chunk")
-                return
-            }
-
-            let segment = Segment(
-                text: transcription.trimmingCharacters(in: .whitespacesAndNewlines),
-                startTime: offsetSeconds,
-                endTime: offsetSeconds + (result?.timings.totalDecodingTime ?? 5.0)
-            )
-
-            segments.append(segment)
-            print("TranscriptionEngine: Segment added: \"\(segment.text.prefix(50))...\"")
+            engine.prepare()
+            try engine.start()
+            print("TranscriptionEngine: Audio engine started for live recognition")
         } catch {
-            print("TranscriptionEngine: Transcription failed - \(error.localizedDescription)")
-            lastError = "Transcription failed: \(error.localizedDescription)"
+            print("TranscriptionEngine: Audio engine failed: \(error)")
+            lastError = "Audio engine error"
+            return
         }
-        #else
-        // Stub mode: segments generated by timer, no chunk processing needed
-        #endif
+
+        recognitionTask = speechRecognizer.recognitionTask(with: request) { @Sendable result, error in
+            let isFinal = result?.isFinal ?? false
+            let fullText = result?.bestTranscription.formattedString
+            let errorCode = (error as? NSError)?.code
+
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+
+                if let fullText = fullText {
+                    self.liveText = fullText
+
+                    if isFinal {
+                        self.commitSegment(text: fullText)
+                        self.restartRecognition()
+                    } else {
+                        self.checkForNewSegments(fullText: fullText)
+                    }
+                }
+
+                if error != nil, errorCode != 1, errorCode != 216 {
+                    print("TranscriptionEngine: Recognition error code \(errorCode ?? -1)")
+                    self.restartRecognition()
+                }
+            }
+        }
     }
 
-    // MARK: - Stub Mode
+    private func stopLiveRecognition() {
+        // Commit any remaining text
+        if !liveText.isEmpty && liveText != lastCommittedText {
+            let uncommitted = getUncommittedText(from: liveText)
+            if !uncommitted.isEmpty {
+                commitSegment(text: uncommitted)
+            }
+        }
 
-    #if !canImport(WhisperKit)
+        audioEngine?.stop()
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        audioEngine = nil
+
+        recognitionRequest?.endAudio()
+        recognitionRequest = nil
+
+        recognitionTask?.cancel()
+        recognitionTask = nil
+    }
+
+    private func restartRecognition() {
+        guard sessionID != nil else { return }
+
+        audioEngine?.stop()
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        audioEngine = nil
+        recognitionRequest = nil
+        recognitionTask = nil
+        lastCommittedText = ""
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.startLiveRecognition()
+        }
+    }
+
+    // MARK: - Segment Management
+
+    private func checkForNewSegments(fullText: String) {
+        let uncommitted = getUncommittedText(from: fullText)
+        guard !uncommitted.isEmpty else { return }
+
+        var textToCommit: String?
+
+        // Check for sentence-ending punctuation
+        let sentenceEnders: [Character] = [".", "!", "?"]
+        if let lastEnderIndex = uncommitted.lastIndex(where: { sentenceEnders.contains($0) }) {
+            textToCommit = String(uncommitted[uncommitted.startIndex...lastEnderIndex])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        // Also commit if we have enough words (handles unpunctuated speech)
+        else {
+            let wordCount = uncommitted.split(separator: " ").count
+            if wordCount >= 6 {
+                textToCommit = uncommitted.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        if let text = textToCommit, !text.isEmpty {
+            commitSegment(text: text)
+            let consumed = lastCommittedText + (lastCommittedText.isEmpty ? "" : " ") + text
+            lastCommittedText = consumed
+        }
+    }
+
+    private func getUncommittedText(from fullText: String) -> String {
+        if lastCommittedText.isEmpty { return fullText }
+        if fullText.hasPrefix(lastCommittedText) {
+            let startIndex = fullText.index(fullText.startIndex, offsetBy: lastCommittedText.count)
+            return String(fullText[startIndex...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return fullText
+    }
+
+    private func commitSegment(text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let startTime = sessionStartTime else { return }
+
+        let elapsed = Date().timeIntervalSince(startTime)
+
+        let segment = Segment(
+            text: trimmed,
+            startTime: lastSegmentEndTime,
+            endTime: elapsed
+        )
+
+        segments.append(segment)
+        lastSegmentEndTime = elapsed
+        print("TranscriptionEngine: Segment: \"\(trimmed.prefix(50))\"")
+    }
+
+    // MARK: - Stub Fallback
+
     private func startStubTimer() {
         stopStubTimer()
 
-        // Generate first segment after 3 seconds
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
             self?.generateStubSegment()
         }
 
-        // Then every 8 seconds
         stubTimer = Timer.scheduledTimer(withTimeInterval: 8.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.generateStubSegment()
@@ -190,11 +307,10 @@ class TranscriptionEngine: ObservableObject {
     }
 
     private func generateStubSegment() {
-        guard sessionID != nil, let startTime = stubStartTime else { return }
+        guard sessionID != nil, let startTime = sessionStartTime else { return }
 
         let elapsed = Date().timeIntervalSince(startTime)
-        let phraseIndex = stubIndex % stubPhrases.count
-        let text = stubPhrases[phraseIndex]
+        let text = stubPhrases[stubIndex % stubPhrases.count]
 
         let segment = Segment(
             text: text,
@@ -204,7 +320,6 @@ class TranscriptionEngine: ObservableObject {
 
         segments.append(segment)
         stubIndex += 1
-        print("TranscriptionEngine [STUB]: Segment \(stubIndex): \"\(text.prefix(40))...\"")
+        print("TranscriptionEngine [STUB]: \"\(text.prefix(40))...\"")
     }
-    #endif
 }
