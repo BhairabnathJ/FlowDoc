@@ -4,7 +4,17 @@ import SwiftUI
 struct FlowDocApp: App {
     var body: some Scene {
         WindowGroup {
-            HomeView()
+            TabView {
+                HomeView()
+                    .tabItem {
+                        Label("Sessions", systemImage: "doc.text.fill")
+                    }
+
+                CircuitCameraView()
+                    .tabItem {
+                        Label("Camera", systemImage: "camera.viewfinder")
+                    }
+            }
         }
     }
 }
