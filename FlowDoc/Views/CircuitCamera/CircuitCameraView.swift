@@ -11,21 +11,44 @@ struct CircuitCameraView: View {
     @Environment(\.colorScheme) var colorScheme
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
+        GeometryReader { proxy in
+            ZStack {
+                Color.black.ignoresSafeArea()
 
-            if manager.isRunning {
-                CameraPreviewView(session: manager.captureSession)
-                    .ignoresSafeArea()
-            }
+                if manager.isRunning {
+                    CameraPreviewView(session: manager.captureSession)
+                        .ignoresSafeArea()
+                }
 
-            // Overlay UI
-            VStack {
-                statsBar
-                Spacer()
-                if !manager.isCameraAuthorized {
-                    permissionPrompt
+                // Calibration corner dots
+                ForEach(Array(manager.calibrationCorners.enumerated()), id: \.offset) { index, corner in
+                    Circle()
+                        .fill(calibrationDotColor(index: index))
+                        .frame(width: 16, height: 16)
+                        .position(visionToUIKit(corner, in: proxy.size))
+                }
+
+                // Calibration tap overlay
+                if manager.isCalibrating {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { location in
+                            let visionPt = uiKitToVision(location, in: proxy.size)
+                            manager.addCalibrationCorner(visionPt)
+                        }
+
+                    calibrationInstructions
+                }
+
+                // Overlay UI
+                VStack {
+                    statsBar
                     Spacer()
+                    if !manager.isCameraAuthorized {
+                        permissionPrompt
+                        Spacer()
+                    }
+                    calibrationBar
                 }
             }
         }
@@ -42,6 +65,10 @@ struct CircuitCameraView: View {
                     .font(DesignTokens.Typography.bodyMedium)
                 Text("IDs: \(manager.trackedWireIDs.count) stable")
                     .font(DesignTokens.Typography.small)
+                if manager.isCalibrated {
+                    Text("Mapped: \(manager.mappedConnections.count)")
+                        .font(DesignTokens.Typography.small)
+                }
             }
             .foregroundStyle(.white)
             .padding(DesignTokens.Spacing.sm)
@@ -59,6 +86,80 @@ struct CircuitCameraView: View {
                 .cornerRadius(DesignTokens.CornerRadius.md)
         }
         .padding(DesignTokens.Spacing.lg)
+    }
+
+    // MARK: - Calibration Bar
+
+    private var calibrationBar: some View {
+        HStack {
+            if manager.isCalibrating {
+                Button("Cancel") {
+                    manager.isCalibrating = false
+                    manager.calibrationCorners = []
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, DesignTokens.Spacing.md)
+                .padding(.vertical, DesignTokens.Spacing.sm)
+                .background(.red.opacity(0.7))
+                .cornerRadius(DesignTokens.CornerRadius.md)
+            } else if manager.isCalibrated {
+                Button("Re-calibrate") {
+                    manager.resetCalibration()
+                    manager.startCalibration()
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, DesignTokens.Spacing.md)
+                .padding(.vertical, DesignTokens.Spacing.sm)
+                .background(.orange.opacity(0.7))
+                .cornerRadius(DesignTokens.CornerRadius.md)
+            } else {
+                Button("Calibrate Board") {
+                    manager.startCalibration()
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, DesignTokens.Spacing.md)
+                .padding(.vertical, DesignTokens.Spacing.sm)
+                .background(.blue.opacity(0.7))
+                .cornerRadius(DesignTokens.CornerRadius.md)
+            }
+        }
+        .padding(.bottom, DesignTokens.Spacing.xl)
+    }
+
+    // MARK: - Calibration Instructions
+
+    private var calibrationInstructions: some View {
+        VStack {
+            Spacer()
+            let remaining = 4 - manager.calibrationCorners.count
+            Text("Tap \(remaining) corner\(remaining == 1 ? "" : "s") of your breadboard")
+                .font(DesignTokens.Typography.bodyMedium)
+                .foregroundStyle(.white)
+                .padding(DesignTokens.Spacing.md)
+                .background(.black.opacity(0.7))
+                .cornerRadius(DesignTokens.CornerRadius.md)
+
+            Text("Order: bottom-left → bottom-right → top-right → top-left")
+                .font(DesignTokens.Typography.small)
+                .foregroundStyle(.white.opacity(0.7))
+                .padding(.bottom, 80)
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func calibrationDotColor(index: Int) -> Color {
+        [Color.red, .green, .blue, .yellow][index % 4]
+    }
+
+    /// Converts Vision normalized coords (bottom-left origin) to UIKit view coords.
+    private func visionToUIKit(_ point: CGPoint, in size: CGSize) -> CGPoint {
+        CGPoint(x: point.x * size.width, y: (1.0 - point.y) * size.height)
+    }
+
+    /// Converts UIKit view coords to Vision normalized coords (bottom-left origin).
+    private func uiKitToVision(_ point: CGPoint, in size: CGSize) -> CGPoint {
+        CGPoint(x: point.x / size.width, y: 1.0 - point.y / size.height)
     }
 
     // MARK: - Permission Prompt
@@ -92,15 +193,20 @@ struct CircuitCameraView: View {
 class CircuitCameraManager: NSObject, ObservableObject {
     @Published var wireCount: Int = 0
     @Published var trackedWireIDs: [UUID] = []
+    @Published var mappedConnections: [MappedConnection] = []
+    @Published var isCalibrated: Bool = false
     @Published var fps: Double = 0.0
     @Published var isDetecting: Bool = false
     @Published var isRunning: Bool = false
     @Published var isCameraAuthorized: Bool = true
+    @Published var isCalibrating: Bool = false
+    @Published var calibrationCorners: [CGPoint] = []
 
     let captureSession = AVCaptureSession()
 
     private let detector: VisionFrameworkDetector
     private let tracker: WireTracker
+    private let mapper = CoordinateMapper()
     private let throttle: FrameThrottle
     private let videoOutput = AVCaptureVideoDataOutput()
     private let videoQueue = DispatchQueue(label: "com.flowdoc.circuitcamera.video")
@@ -136,6 +242,37 @@ class CircuitCameraManager: NSObject, ObservableObject {
         captureSession.stopRunning()
         isRunning = false
         isDetecting = false
+    }
+
+    // MARK: - Calibration
+
+    /// Enters calibration mode where the user taps 4 breadboard corners.
+    func startCalibration() {
+        calibrationCorners = []
+        isCalibrating = true
+    }
+
+    /// Records a corner tap during calibration.
+    /// After 4 taps, automatically computes the homography and exits calibration mode.
+    ///
+    /// - Parameter point: Tap location in Vision normalized coordinates (bottom-left origin)
+    func addCalibrationCorner(_ point: CGPoint) {
+        guard isCalibrating, calibrationCorners.count < 4 else { return }
+        calibrationCorners.append(point)
+
+        if calibrationCorners.count == 4 {
+            mapper.calibrate(corners: calibrationCorners)
+            isCalibrated = mapper.isCalibrated
+            isCalibrating = false
+        }
+    }
+
+    /// Clears calibration and mapped connections.
+    func resetCalibration() {
+        mapper.resetCalibration()
+        isCalibrated = false
+        mappedConnections = []
+        calibrationCorners = []
     }
 
     // MARK: - Setup
@@ -205,6 +342,12 @@ extension CircuitCameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 let tracked = await self.tracker.updateTracking(with: contours)
                 self.wireCount = tracked.count
                 self.trackedWireIDs = tracked.map(\.id)
+
+                // Coordinate mapping (runs only when calibrated)
+                if self.mapper.isCalibrated {
+                    let mapped = try await self.mapper.mapToGrid(tracked)
+                    self.mappedConnections = mapped
+                }
 
                 // FPS calculation
                 self.frameCount += 1
