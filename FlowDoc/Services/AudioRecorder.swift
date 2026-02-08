@@ -1,167 +1,327 @@
 import Foundation
-import Combine
 import AVFoundation
+import Combine
+import UIKit
 
-// MARK: - Recording state
+@MainActor
+class AudioRecorder: NSObject, ObservableObject {
+    @Published var isRecording = false
+    @Published var isPaused = false
+    @Published var currentSession: Session?
+    @Published var duration: TimeInterval = 0
 
-/// Lifecycle state of an audio-recording session.
-enum RecordingState: Equatable {
-    case idle       /// No session in progress.
-    case recording  /// Mic is active; audio is being written to disk.
-    case paused     /// Session exists but mic is muted; nothing is saved during the pause.
-}
+    private var audioRecorder: AVAudioRecorder?
+    private var durationTimer: Timer?
+    private var chunkTimer: Timer?
 
-// MARK: - AudioRecorder
+    private var recordingStartTime: Date?
+    private var pausedDuration: TimeInterval = 0
+    private var pauseStartTime: Date?
 
-/// Observable model that owns the AVAudioRecorder and publishes state for SwiftUI.
-/// Background audio mode (declared in Info.plist) keeps recording alive when the
-/// app is backgrounded or the screen locks.
-class AudioRecorder: ObservableObject {
-    @Published private(set) var state:          RecordingState = .idle
-    @Published private(set) var currentSession: Session?
-    /// Pause-aware elapsed seconds; ticks every second while recording.
-    @Published private(set) var elapsedTime:    TimeInterval   = 0
+    private var lastChunkOffset: TimeInterval = 0
+    private let chunkInterval: TimeInterval = 30.0 // Send chunk every 30 seconds
 
-    private var recorder:        AVAudioRecorder?
-    private var timer:           Timer?
-    /// Wall-clock start of the current continuous recording segment.
-    private var segmentStart:    Date?
-    /// Accumulated seconds from segments before the most recent pause.
-    private var accumulatedTime: TimeInterval = 0
+    // Background task support
+    private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
 
-    // MARK: - Read-only helpers
+    // Kill switch
+    private let killSwitch = KillSwitchDetector()
 
-    var hasActiveSession: Bool { currentSession != nil }
-
-    var formattedElapsedTime: String {
-        Session.formatDuration(elapsedTime)
-    }
-
-    // MARK: - Controls
-
-    /// Entry-point from the UI.  Non-async so it can be wired directly to a button action.
-    func startRecording() {
-        Task { await performStart() }
-    }
-
-    func pauseRecording() {
-        guard state == .recording else { return }
-        recorder?.pause()
-        if let start = segmentStart {
-            accumulatedTime += Date().timeIntervalSince(start)
-            segmentStart = nil
-        }
-        state = .paused
-        stopTimer()
-        print("Recording paused at \(formattedElapsedTime)")
-    }
-
-    func resumeRecording() {
-        guard state == .paused else { return }
-        recorder?.record()
-        segmentStart = Date()
-        state = .recording
-        startTimer()
-        print("Recording resumed")
-    }
-
-    func stopRecording() {
-        recorder?.stop()
-        stopTimer()
-
-        if var session = currentSession {
-            session.endTime = Date()
-            DatabaseManager.shared.updateSession(session)
-            print("Session ended: \(session.id)  duration: \(session.formattedDuration)")
-        }
-
-        recorder        = nil
-        currentSession  = nil
-        state           = .idle
-        elapsedTime     = 0
-        accumulatedTime = 0
-        segmentStart    = nil
-    }
-
-    // MARK: - Private – start flow
-
-    private func performStart() async {
-        // Request mic permission via the iOS 17+ API.
-        let granted = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-            AVAudioApplication.requestRecordPermission(completionHandler: { result in
-                cont.resume(returning: result)
-            })
-        }
-        guard granted else {
-            print("Microphone permission denied")
-            return
-        }
-
-        // Configure AVAudioSession for background recording.
-        do {
-            let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.record, mode: .default, options: [.allowBluetoothHFP])
-            try audioSession.setActive(true)
-        } catch {
-            print("AVAudioSession configuration error: \(error)")
-            return
-        }
-
-        // Persist new session.
-        let session = Session()
-        currentSession = session
-        DatabaseManager.shared.saveSession(session)
-
-        // Open the recorder on disk.
-        let filePath = documentsDirectory.appendingPathComponent("\(session.id).m4a")
-        let settings: [String: Any] = [
-            AVFormatIDKey:            Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey:          16_000,
-            AVNumberOfChannelsKey:    1,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
-
-        do {
-            recorder = try AVAudioRecorder(url: filePath, settings: settings)
-            recorder?.record()
-
-            state           = .recording
-            segmentStart    = Date()
-            accumulatedTime = 0
-            elapsedTime     = 0
-            startTimer()
-
-            print("Recording started → \(filePath.lastPathComponent)")
-        } catch {
-            print("AVAudioRecorder creation error: \(error)")
-            currentSession = nil
-        }
-    }
-
-    // MARK: - Timer
-
-    private func startTimer() {
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
-                self.tick()
+    override init() {
+        super.init()
+        setupAudioSession()
+        setupInterruptionHandling()
+        killSwitch.onTrigger = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.stopRecording()
             }
         }
     }
 
-    private func stopTimer() {
-        timer?.invalidate()
-        timer = nil
+    private func setupAudioSession() {
+        #if !targetEnvironment(macCatalyst)
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
+            try session.setActive(true)
+            print("✅ AudioRecorder: Audio session configured")
+        } catch {
+            print("❌ AudioRecorder: Failed to set up audio session: \(error)")
+        }
+        #else
+        print("ℹ️ AudioRecorder: AVAudioSession not available on Mac Catalyst")
+        #endif
     }
 
-    private func tick() {
-        guard let start = segmentStart else { return }
-        elapsedTime = accumulatedTime + Date().timeIntervalSince(start)
+    // MARK: - Interruption Handling
+
+    private func setupInterruptionHandling() {
+        #if !targetEnvironment(macCatalyst)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleInterruption(_:)),
+            name: AVAudioSession.interruptionNotification,
+            object: nil
+        )
+        #endif
     }
 
-    // MARK: - Helpers
+    @objc private func handleInterruption(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
+            return
+        }
 
-    private var documentsDirectory: URL {
+        switch type {
+        case .began:
+            print("⏸️ AudioRecorder: Interruption began (phone call)")
+            if isRecording && !isPaused {
+                pauseRecording()
+            }
+        case .ended:
+            if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
+                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                if options.contains(.shouldResume) {
+                    print("▶️ AudioRecorder: Resuming after interruption")
+                    resumeRecording()
+                }
+            }
+        @unknown default:
+            break
+        }
+    }
+
+    // MARK: - Background Task
+
+    private func beginBackgroundTask() {
+        backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "FlowDocRecording") { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.endBackgroundTask()
+            }
+        }
+    }
+
+    private func endBackgroundTask() {
+        if backgroundTaskID != .invalid {
+            UIApplication.shared.endBackgroundTask(backgroundTaskID)
+            backgroundTaskID = .invalid
+        }
+    }
+
+    // MARK: - Session State Persistence
+
+    func saveCurrentSessionState() {
+        guard isRecording, var session = currentSession else { return }
+        session.endTime = Date()
+        DatabaseManager.shared.saveSession(session)
+        print("✅ AudioRecorder: Saved session state")
+    }
+
+    func startRecording() {
+        guard !isRecording else {
+            print("⚠️ AudioRecorder: Already recording")
+            return
+        }
+
+        let session = Session()
+        currentSession = session
+
+        let audioURL = documentDirectory().appendingPathComponent("\(session.id.uuidString).m4a")
+
+        let settings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: 16000, // WhisperKit expects 16kHz
+            AVNumberOfChannelsKey: 1,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+        ]
+
+        do {
+            audioRecorder = try AVAudioRecorder(url: audioURL, settings: settings)
+            audioRecorder?.delegate = self
+            audioRecorder?.record()
+
+            // Begin background task so recording continues when app backgrounds
+            beginBackgroundTask()
+
+            // Start kill switch detection
+            killSwitch.start()
+
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                self.isRecording = true
+                self.isPaused = false
+                self.recordingStartTime = Date()
+                self.duration = 0
+                self.pausedDuration = 0
+                self.lastChunkOffset = 0
+            }
+
+            // Save session to DB
+            DatabaseManager.shared.saveSession(session)
+
+            // Start transcription
+            Task {
+                TranscriptionEngine.shared.start(sessionID: session.id)
+            }
+
+            // Start duration timer (UI updates)
+            durationTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.updateDuration()
+                }
+            }
+
+            // Start chunk processing timer
+            chunkTimer = Timer.scheduledTimer(withTimeInterval: chunkInterval, repeats: true) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    await self?.processAudioChunk()
+                }
+            }
+
+            print("✅ AudioRecorder: Recording started for session \(session.id)")
+        } catch {
+            print("❌ AudioRecorder: Failed to start recording: \(error)")
+        }
+    }
+
+    func pauseRecording() {
+        guard isRecording, !isPaused else { return }
+
+        audioRecorder?.pause()
+        TranscriptionEngine.shared.pause()
+
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            self.isPaused = true
+            self.pauseStartTime = Date()
+        }
+
+        print("⏸️ AudioRecorder: Recording paused")
+    }
+
+    func resumeRecording() {
+        guard isRecording, isPaused else { return }
+
+        audioRecorder?.record()
+        TranscriptionEngine.shared.resume()
+
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            self.isPaused = false
+
+            if let pauseStart = self.pauseStartTime {
+                self.pausedDuration += Date().timeIntervalSince(pauseStart)
+                self.pauseStartTime = nil
+            }
+        }
+
+        print("▶️ AudioRecorder: Recording resumed")
+    }
+
+    func stopRecording() {
+        guard isRecording else { return }
+
+        audioRecorder?.stop()
+        durationTimer?.invalidate()
+        chunkTimer?.invalidate()
+        durationTimer = nil
+        chunkTimer = nil
+
+        // Stop kill switch detection
+        killSwitch.stop()
+
+        // End background task
+        endBackgroundTask()
+
+        // Process final chunk if any remaining audio
+        Task {
+            await processAudioChunk()
+
+            // Stop transcription (will save final segments to DB)
+            TranscriptionEngine.shared.stop()
+
+            // Update session with final metadata
+            if var session = currentSession {
+                session.endTime = Date()
+                DatabaseManager.shared.saveSession(session)
+                print("✅ AudioRecorder: Session \(session.id) saved with duration \(session.duration)s")
+            }
+
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                self.isRecording = false
+                self.isPaused = false
+                self.recordingStartTime = nil
+                self.pausedDuration = 0
+                self.lastChunkOffset = 0
+            }
+        }
+
+        print("⏹️ AudioRecorder: Recording stopped")
+    }
+
+    private func updateDuration() {
+        guard let startTime = recordingStartTime else { return }
+
+        let elapsed = Date().timeIntervalSince(startTime) - pausedDuration
+
+        // Don't update duration while paused
+        guard !isPaused else { return }
+
+        // Wrap @Published update in Task to defer to next run loop iteration
+        // This prevents "Publishing changes from within view updates" error
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            self.duration = elapsed
+        }
+    }
+
+    private func processAudioChunk() async {
+        guard isRecording, currentSession != nil, let audioURL = audioRecorder?.url else {
+            return
+        }
+
+        // Don't process chunks while paused
+        guard !isPaused else { return }
+
+        // Get current recording duration (actual audio time, not wall time)
+        let currentOffset = audioRecorder?.currentTime ?? 0
+
+        // Only process if we have new audio (at least 10 seconds)
+        guard currentOffset - lastChunkOffset >= 10.0 else {
+            return
+        }
+
+        print("🎤 AudioRecorder: Processing audio chunk at offset \(currentOffset)s")
+
+        // Send chunk to transcription engine
+        await TranscriptionEngine.shared.processChunk(url: audioURL, offsetSeconds: lastChunkOffset)
+
+        lastChunkOffset = currentOffset
+    }
+
+    private func documentDirectory() -> URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    }
+}
+
+extension AudioRecorder: AVAudioRecorderDelegate {
+    nonisolated func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            if flag {
+                print("✅ AudioRecorder: Recording finished successfully")
+            } else {
+                print("❌ AudioRecorder: Recording finished with error")
+            }
+        }
+    }
+
+    nonisolated func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            print("❌ AudioRecorder: Encoding error: \(error?.localizedDescription ?? "unknown")")
+        }
     }
 }

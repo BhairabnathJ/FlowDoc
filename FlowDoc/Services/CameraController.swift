@@ -95,8 +95,9 @@ class CameraController: ObservableObject {
         session.commitConfiguration()
 
         // startRunning() blocks – dispatch to a background thread.
+        // Use .userInteractive to match SwiftUI's main thread priority and avoid priority inversions
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global(qos: .userInitiated).async { [session = self.session] in
+            DispatchQueue.global(qos: .userInteractive).async { [session = self.session] in
                 session.startRunning()
                 cont.resume()
             }
@@ -114,7 +115,8 @@ class CameraController: ObservableObject {
         }
 
         // Defer @Published update to avoid "Publishing changes from within view updates"
-        await MainActor.run {
+        // Use Task to defer to next run loop cycle instead of synchronous await MainActor.run
+        Task { @MainActor in
             self.isReady = true
             print("CameraController: session ready (isRunning: \(session.isRunning))")
         }
