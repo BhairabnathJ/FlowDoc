@@ -65,6 +65,7 @@
 			);
 			name = FlowDoc;
 			packageProductDependencies = (
+				EB0001012F3400000000001A /* WhisperKit */,
 			);
 			productName = FlowDoc;
 			productReference = EBFA79DE2F33BC6300AF980D /* FlowDoc.app */;
@@ -98,6 +99,9 @@
 			productRefGroup = EBFA79DF2F33BC6300AF980D /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
+			packageReferences = (
+				EB0001002F3400000000001B /* XCRemoteSwiftPackageReference "WhisperKit" */,
+			);
 			targets = (
 				EBFA79DD2F33BC6300AF980D /* FlowDoc */,
 			);
@@ -336,6 +340,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		EB0001002F3400000000001B /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/argmaxinc/WhisperKit.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.15.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		EB0001012F3400000000001A /* WhisperKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EB0001002F3400000000001B /* XCRemoteSwiftPackageReference "WhisperKit" */;
+			productName = WhisperKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = EBFA79D62F33BC6300AF980D /* Project object */;
 }
