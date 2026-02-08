@@ -88,7 +88,7 @@ struct CircuitCameraView: View {
 
 // MARK: - CircuitCameraManager
 
-/// Manages the AVCaptureSession and runs wire detection on each frame.
+/// Manages the AVCaptureSession, runs wire detection, and tracks wires across frames.
 class CircuitCameraManager: NSObject, ObservableObject {
     @Published var wireCount: Int = 0
     @Published var fps: Double = 0.0
@@ -99,6 +99,7 @@ class CircuitCameraManager: NSObject, ObservableObject {
     let captureSession = AVCaptureSession()
 
     private let detector: VisionFrameworkDetector
+    private let tracker: WireTracker
     private let throttle: FrameThrottle
     private let videoOutput = AVCaptureVideoDataOutput()
     private let videoQueue = DispatchQueue(label: "com.flowdoc.circuitcamera.video")
@@ -108,6 +109,7 @@ class CircuitCameraManager: NSObject, ObservableObject {
 
     override init() {
         self.detector = VisionFrameworkDetector(config: .deviceDefault())
+        self.tracker = WireTracker()
         self.throttle = FrameThrottle(targetFPS: WireDetectionConfig.deviceDefault().targetFPS)
         super.init()
     }
@@ -194,12 +196,13 @@ extension CircuitCameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             guard await self.throttle.shouldProcess(timestamp: timestamp) else { return }
 
             do {
-                let wires = try await self.detector.detectWires(
+                let contours = try await self.detector.detectWires(
                     in: pixelBuffer,
                     orientation: .up,
                     timestamp: timestamp
                 )
-                self.wireCount = wires.count
+                let tracked = await self.tracker.updateTracking(with: contours)
+                self.wireCount = tracked.count
 
                 // FPS calculation
                 self.frameCount += 1
