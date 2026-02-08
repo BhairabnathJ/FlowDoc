@@ -66,6 +66,7 @@ struct CameraView: View {
                     .foregroundStyle(.white)
                     .shadow(color: .black.opacity(0.6), radius: 3)
             }
+            .accessibilityLabel("Close camera")
             .padding(DesignTokens.Spacing.lg)
             Spacer()
         }
@@ -85,6 +86,8 @@ struct CameraView: View {
                         .frame(width: 78, height: 78)
                 }
             }
+            .accessibilityLabel("Take photo")
+            .accessibilityHint("Captures a photo linked to the current recording timestamp")
             Text("Photo")
                 .font(DesignTokens.Typography.small)
                 .foregroundStyle(.white)

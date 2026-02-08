@@ -28,9 +28,23 @@ struct DesignTokens {
         static let stateRecordingLight = Color(hex: "#C0152F")
         static let stateRecordingDark  = Color(hex: "#FF5459")
 
-        // --- State: paused (orange) ---
+        // --- State: paused / warning (orange) ---
         static let statePausedLight = Color(hex: "#A84B2F")
         static let statePausedDark  = Color(hex: "#E68161")
+
+        // --- State: success (green/teal – reuses accent) ---
+        static let stateSuccessLight = Color(hex: "#21808D")
+        static let stateSuccessDark  = Color(hex: "#32B8C6")
+
+        // --- State: error (red – reuses recording red) ---
+        static let stateErrorLight = Color(hex: "#C0152F")
+        static let stateErrorDark  = Color(hex: "#FF5459")
+
+        // --- Borders ---
+        static let borderPrimaryLight   = Color(hex: "#5E5240").opacity(0.2)
+        static let borderSecondaryLight = Color(hex: "#5E5240").opacity(0.12)
+        static let borderPrimaryDark    = Color(hex: "#77787C").opacity(0.3)
+        static let borderSecondaryDark  = Color(hex: "#77787C").opacity(0.15)
 
         // MARK: Adaptive helpers
         static func backgroundPrimary(for cs: ColorScheme)   -> Color { cs == .dark ? backgroundPrimaryDark   : backgroundPrimaryLight }
@@ -42,6 +56,10 @@ struct DesignTokens {
         static func accentPrimary(for cs: ColorScheme)       -> Color { cs == .dark ? accentPrimaryDark       : accentPrimaryLight }
         static func stateRecording(for cs: ColorScheme)      -> Color { cs == .dark ? stateRecordingDark      : stateRecordingLight }
         static func statePaused(for cs: ColorScheme)         -> Color { cs == .dark ? statePausedDark         : statePausedLight }
+        static func stateSuccess(for cs: ColorScheme)        -> Color { cs == .dark ? stateSuccessDark        : stateSuccessLight }
+        static func stateError(for cs: ColorScheme)          -> Color { cs == .dark ? stateErrorDark          : stateErrorLight }
+        static func borderPrimary(for cs: ColorScheme)       -> Color { cs == .dark ? borderPrimaryDark       : borderPrimaryLight }
+        static func borderSecondary(for cs: ColorScheme)     -> Color { cs == .dark ? borderSecondaryDark     : borderSecondaryLight }
     }
 
     // MARK: - Typography
@@ -62,6 +80,7 @@ struct DesignTokens {
         static let sm:  CGFloat = 8
         static let md:  CGFloat = 12
         static let lg:  CGFloat = 16
+        static let xlg: CGFloat = 20
         static let xl:  CGFloat = 24
         static let xxl: CGFloat = 32
     }

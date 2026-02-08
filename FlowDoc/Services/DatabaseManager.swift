@@ -45,6 +45,15 @@ class DatabaseManager: ObservableObject {
         sessions.sorted { $0.startTime > $1.startTime }
     }
 
+    func deleteSession(_ id: UUID) {
+        sessions.removeAll { $0.id == id }
+        persistSessions()
+        // Also clean up segments for this session's transcript
+        segments.removeValue(forKey: id.uuidString)
+        persistSegments()
+        print("Session deleted: \(id)")
+    }
+
     // MARK: - Segment operations
 
     func saveSegment(_ segment: Segment, transcriptId: UUID) {

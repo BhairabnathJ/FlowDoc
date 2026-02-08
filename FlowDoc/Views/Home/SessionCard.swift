@@ -43,5 +43,9 @@ struct SessionCard: View {
         .padding(DesignTokens.Spacing.lg)
         .background(DesignTokens.Colors.backgroundSecondary(for: colorScheme))
         .cornerRadius(DesignTokens.CornerRadius.lg)
+        .overlay {
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.lg)
+                .stroke(DesignTokens.Colors.borderSecondary(for: colorScheme), lineWidth: 1)
+        }
     }
 }
