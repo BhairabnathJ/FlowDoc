@@ -24,6 +24,7 @@ class KillSwitchDetector: NSObject {
     // MARK: – Lifecycle
 
     func start() {
+        startVoicePhraseDetectionIfPossible()
         AVAudioSession.sharedInstance().addObserver(
             self, forKeyPath: "outputVolume", options: [], context: nil
         )
@@ -37,6 +38,15 @@ class KillSwitchDetector: NSObject {
         pressTimer?.invalidate()
         pressTimer = nil
         pressCount = 0
+    }
+
+    // MARK: – Voice phrase (stub)
+
+    /// Placeholder for voice-phrase kill switch detection.
+    func startVoicePhraseDetectionIfPossible() {
+        // TODO: When AudioRecorder migrates to AVAudioEngine, share buffers
+        // with SFSpeechRecognizer or reuse WhisperKit transcript to detect
+        // the custom kill phrase ("BIG APPLE BAZINGA").
     }
 
     // MARK: – KVO
