@@ -10,7 +10,7 @@ class DatabaseManager: ObservableObject {
     private let sessionsURL: URL
     private let segmentsURL: URL
 
-    private var sessions: [Session]                = []
+    @Published private(set) var allSessions: [Session] = []
     private var segments: [String: [Segment]]      = [:]   // transcriptId → segments
 
     private init() {
@@ -18,31 +18,31 @@ class DatabaseManager: ObservableObject {
         sessionsURL = docs.appendingPathComponent("flowdoc_sessions.json")
         segmentsURL = docs.appendingPathComponent("flowdoc_segments.json")
         loadFromDisk()
-        print("DatabaseManager initialised – \(sessions.count) session(s) loaded")
+        print("DatabaseManager initialised – \(allSessions.count) session(s) loaded")
     }
 
     // MARK: - Session operations
 
     func saveSession(_ session: Session) {
-        sessions.removeAll { $0.id == session.id }
-        sessions.append(session)
+        allSessions.removeAll { $0.id == session.id }
+        allSessions.append(session)
         persistSessions()
         print("Session saved: \(session.id)")
     }
 
     func updateSession(_ session: Session) {
-        guard let idx = sessions.firstIndex(where: { $0.id == session.id }) else {
+        guard let idx = allSessions.firstIndex(where: { $0.id == session.id }) else {
             print("Session not found for update: \(session.id)")
             return
         }
-        sessions[idx] = session
+        allSessions[idx] = session
         persistSessions()
         print("Session updated: \(session.id)")
     }
 
     /// All sessions, newest first.
     func fetchAllSessions() -> [Session] {
-        sessions.sorted { $0.startTime > $1.startTime }
+        allSessions.sorted { $0.startTime > $1.startTime }
     }
 
     // MARK: - Segment operations
@@ -102,7 +102,7 @@ class DatabaseManager: ObservableObject {
 
     private func persistSessions() {
         do {
-            let data = try JSONEncoder().encode(sessions)
+            let data = try JSONEncoder().encode(allSessions)
             try data.write(to: sessionsURL)
         } catch {
             print("Failed to persist sessions: \(error)")
@@ -120,7 +120,7 @@ class DatabaseManager: ObservableObject {
 
     private func loadFromDisk() {
         if let data = try? Data(contentsOf: sessionsURL) {
-            sessions = (try? JSONDecoder().decode([Session].self, from: data)) ?? []
+            allSessions = (try? JSONDecoder().decode([Session].self, from: data)) ?? []
         }
         if let data = try? Data(contentsOf: segmentsURL) {
             segments = (try? JSONDecoder().decode([String: [Segment]].self, from: data)) ?? [:]

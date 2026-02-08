@@ -109,7 +109,7 @@ struct CameraView: View {
     // MARK: – Capture action
 
     private func capturePhoto() {
-        camera.capturePhoto(transcriptOffset: audioRecorder.elapsedTime)
+        camera.capturePhoto(transcriptOffset: audioRecorder.duration)
         withAnimation(.easeOut(duration: 0.1)) { flashFeedback = true }
         Task {
             try? await Task.sleep(for: .milliseconds(100))
@@ -132,7 +132,13 @@ struct CameraPreviewView: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ uiView: PreviewView, context: Context) {}
+    func updateUIView(_ uiView: PreviewView, context: Context) {
+        // Update the preview layer's session when it changes (e.g., after async configuration)
+        // This ensures the preview displays when the session becomes ready
+        if uiView.previewLayer.session != session {
+            uiView.previewLayer.session = session
+        }
+    }
 
     /// UIView whose backing layer IS the AVCaptureVideoPreviewLayer.
     class PreviewView: UIView {
