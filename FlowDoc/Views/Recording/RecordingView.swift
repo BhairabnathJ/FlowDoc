@@ -3,11 +3,10 @@ import UIKit
 
 struct RecordingView: View {
     @EnvironmentObject var audioRecorder: AudioRecorder
+    @EnvironmentObject var transcriptionEngine: TranscriptionEngine
     @Environment(\.colorScheme) var colorScheme
     @Environment(\.dismiss)     var dismiss
 
-    /// Live segments – populated once transcription is active.
-    @State private var segments: [Segment] = []
     @State private var showCamera = false
 
     var body: some View {
@@ -20,8 +19,8 @@ struct RecordingView: View {
             ScrollView {
                 ScrollViewReader { proxy in
                     transcriptContent
-                        .onChange(of: segments.count) { _, _ in
-                            if let lastId = segments.last?.id {
+                        .onChange(of: transcriptionEngine.segments.count) { _, _ in
+                            if let lastId = transcriptionEngine.segments.last?.id {
                                 proxy.scrollTo(lastId, anchor: .bottom)
                             }
                         }
@@ -79,7 +78,12 @@ struct RecordingView: View {
                 .font(DesignTokens.Typography.title2)
                 .foregroundStyle(DesignTokens.Colors.textPrimary(for: colorScheme))
 
-            if segments.isEmpty {
+            // Model download / initialization banner
+            if !transcriptionEngine.isModelReady {
+                modelBanner
+            }
+
+            if transcriptionEngine.segments.isEmpty {
                 VStack(spacing: DesignTokens.Spacing.sm) {
                     Image(systemName: "waveform")
                         .font(.system(size: 36))
@@ -87,16 +91,16 @@ struct RecordingView: View {
                     Text("Transcription will appear here")
                         .font(DesignTokens.Typography.body)
                         .foregroundStyle(DesignTokens.Colors.textTertiary(for: colorScheme))
-                    Text("Add WhisperKit via SPM to enable live transcription")
-                        .font(DesignTokens.Typography.small)
-                        .foregroundStyle(DesignTokens.Colors.textTertiary(for: colorScheme))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, DesignTokens.Spacing.lg)
+                    if transcriptionEngine.isModelReady {
+                        Text("Waiting for first audio chunk…")
+                            .font(DesignTokens.Typography.small)
+                            .foregroundStyle(DesignTokens.Colors.textTertiary(for: colorScheme))
+                    }
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.top, DesignTokens.Spacing.xl)
             } else {
-                ForEach(segments) { segment in
+                ForEach(transcriptionEngine.segments) { segment in
                     TranscriptRow(segment: segment)
                         .id(segment.id)
                 }
@@ -105,6 +109,28 @@ struct RecordingView: View {
         .padding(.horizontal, DesignTokens.Spacing.lg)
         .padding(.top,        DesignTokens.Spacing.lg)
         .padding(.bottom,     DesignTokens.Spacing.xxl)
+    }
+
+    // MARK: – Model banner
+
+    private var modelBanner: some View {
+        HStack(spacing: DesignTokens.Spacing.sm) {
+            ProgressView()
+                .controlSize(.small)
+            if let progress = transcriptionEngine.modelDownloadProgress {
+                Text("Preparing transcription model (\(Int(progress * 100))%)…")
+                    .font(DesignTokens.Typography.small)
+                    .foregroundStyle(DesignTokens.Colors.textSecondary(for: colorScheme))
+            } else {
+                Text("Preparing transcription model…")
+                    .font(DesignTokens.Typography.small)
+                    .foregroundStyle(DesignTokens.Colors.textSecondary(for: colorScheme))
+            }
+        }
+        .padding(DesignTokens.Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(DesignTokens.Colors.backgroundSecondary(for: colorScheme).opacity(0.6))
+        .cornerRadius(DesignTokens.CornerRadius.sm)
     }
 
     // MARK: – Controls

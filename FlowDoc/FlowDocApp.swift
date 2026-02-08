@@ -2,6 +2,8 @@ import SwiftUI
 
 @main
 struct FlowDocApp: App {
+    @StateObject private var transcriptionEngine = TranscriptionEngine.shared
+
     var body: some Scene {
         WindowGroup {
             TabView {
@@ -15,6 +17,7 @@ struct FlowDocApp: App {
                         Label("Camera", systemImage: "camera.viewfinder")
                     }
             }
+            .environmentObject(transcriptionEngine)
         }
     }
 }
