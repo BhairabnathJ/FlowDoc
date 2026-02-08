@@ -1,11 +1,12 @@
 import SwiftUI
+import UIKit
 
 struct RecordingView: View {
     @EnvironmentObject var audioRecorder: AudioRecorder
     @Environment(\.colorScheme) var colorScheme
     @Environment(\.dismiss)     var dismiss
 
-    /// Live segments – populated once WhisperKit transcription is active.
+    /// Live segments – populated once transcription is active.
     @State private var segments: [Segment] = []
     @State private var showCamera = false
 
@@ -66,6 +67,8 @@ struct RecordingView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, DesignTokens.Spacing.xl)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(audioRecorder.state == .recording ? "Recording" : "Paused"), elapsed time \(audioRecorder.formattedElapsedTime)")
     }
 
     // MARK: – Transcript
@@ -113,7 +116,8 @@ struct RecordingView: View {
                 icon:   audioRecorder.state == .recording ? "pause.circle.fill" : "play.circle.fill",
                 label:  audioRecorder.state == .recording ? "Pause"             : "Resume",
                 color:  DesignTokens.Colors.textPrimary(for: colorScheme),
-                action: togglePause
+                action: togglePause,
+                haptic: .medium
             )
             Spacer()
             controlButton(
@@ -121,14 +125,16 @@ struct RecordingView: View {
                 label:    "Stop",
                 color:    DesignTokens.Colors.stateRecording(for: colorScheme),
                 action:   { audioRecorder.stopRecording() },
-                iconSize: 36
+                iconSize: 36,
+                haptic:   .heavy
             )
             Spacer()
             controlButton(
                 icon:   "camera.fill",
                 label:  "Photo",
                 color:  DesignTokens.Colors.textSecondary(for: colorScheme),
-                action: { showCamera = true }
+                action: { showCamera = true },
+                haptic: .light
             )
             Spacer()
         }
@@ -149,6 +155,7 @@ struct RecordingView: View {
             Image(systemName: "ellipsis.circle")
                 .foregroundStyle(DesignTokens.Colors.textSecondary(for: colorScheme))
         }
+        .accessibilityLabel("Session options")
     }
 
     // MARK: – Helpers
@@ -160,8 +167,12 @@ struct RecordingView: View {
     }
 
     private func controlButton(icon: String, label: String, color: Color,
-                               action: @escaping () -> Void, iconSize: CGFloat = 28) -> some View {
-        Button(action: action) {
+                               action: @escaping () -> Void, iconSize: CGFloat = 28,
+                               haptic: UIImpactFeedbackGenerator.FeedbackStyle = .light) -> some View {
+        Button(action: {
+            UIImpactFeedbackGenerator(style: haptic).impactOccurred()
+            action()
+        }) {
             VStack(spacing: DesignTokens.Spacing.xs) {
                 Image(systemName: icon)
                     .font(.system(size: iconSize))
@@ -172,5 +183,7 @@ struct RecordingView: View {
             }
         }
         .frame(width: 64)
+        .accessibilityLabel(label)
+        .accessibilityHint(label == "Stop" ? "Ends the current recording session" : "")
     }
 }

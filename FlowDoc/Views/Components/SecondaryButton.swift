@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct PrimaryButton: View {
+struct SecondaryButton: View {
     let title:  String
     let action: () -> Void
     @Environment(\.colorScheme) var colorScheme
@@ -9,9 +9,9 @@ struct PrimaryButton: View {
         Button(action: action) {
             Text(title)
                 .font(DesignTokens.Typography.bodyMedium)
-                .foregroundStyle(DesignTokens.Colors.backgroundPrimaryLight)
+                .foregroundStyle(DesignTokens.Colors.textPrimary(for: colorScheme))
                 .frame(maxWidth: .infinity, minHeight: 48)
-                .background(DesignTokens.Colors.accentPrimary(for: colorScheme))
+                .background(DesignTokens.Colors.borderSecondary(for: colorScheme))
                 .cornerRadius(DesignTokens.CornerRadius.md)
         }
         .accessibilityLabel(title)

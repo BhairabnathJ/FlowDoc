@@ -1,50 +1,95 @@
 import SwiftUI
+import UIKit
 
 struct HomeView: View {
     @StateObject private var audioRecorder = AudioRecorder()
     @State          private var sessions:  [Session] = []
+    @State          private var searchText = ""
     @Environment(\.colorScheme) var colorScheme
 
     /// Past sessions excluding whichever session is currently active.
     private var pastSessions: [Session] {
-        sessions.filter { $0.id != audioRecorder.currentSession?.id }
+        let base = sessions.filter { $0.id != audioRecorder.currentSession?.id }
+        guard !searchText.isEmpty else { return base }
+        return base.filter { session in
+            session.tags.contains { $0.localizedCaseInsensitiveContains(searchText) }
+        }
     }
 
     var body: some View {
         NavigationStack {
             ZStack(alignment: .bottom) {
-                ScrollView {
-                    VStack(spacing: DesignTokens.Spacing.lg) {
-
-                        // --- active-session card ---
-                        if audioRecorder.hasActiveSession {
-                            ActiveSessionCard(audioRecorder: audioRecorder)
-                                .padding(.horizontal, DesignTokens.Spacing.lg)
-                                .padding(.top,        DesignTokens.Spacing.lg)
-                        }
-
-                        // --- session list  OR  empty state ---
-                        if !pastSessions.isEmpty {
-                            VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                                Text("Recent Sessions")
-                                    .font(DesignTokens.Typography.title2)
-                                    .foregroundStyle(DesignTokens.Colors.textPrimary(for: colorScheme))
-                                    .padding(.horizontal, DesignTokens.Spacing.lg)
-                                    .padding(.top, audioRecorder.hasActiveSession
-                                        ? DesignTokens.Spacing.md
-                                        : DesignTokens.Spacing.lg)
-
-                                ForEach(pastSessions) { session in
-                                    SessionCard(session: session)
-                                        .padding(.horizontal, DesignTokens.Spacing.lg)
-                                }
+                List {
+                    // --- active-session card ---
+                    if audioRecorder.hasActiveSession {
+                        Section {
+                            NavigationLink {
+                                RecordingView()
+                                    .environmentObject(audioRecorder)
+                            } label: {
+                                ActiveSessionCard(audioRecorder: audioRecorder)
                             }
-                        } else if !audioRecorder.hasActiveSession {
-                            emptyState
+                            .listRowInsets(EdgeInsets(
+                                top: DesignTokens.Spacing.sm,
+                                leading: DesignTokens.Spacing.lg,
+                                bottom: DesignTokens.Spacing.sm,
+                                trailing: DesignTokens.Spacing.lg
+                            ))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
                         }
                     }
-                    .padding(.bottom, 100) // room for FAB
+
+                    // --- session list  OR  empty state ---
+                    if !pastSessions.isEmpty {
+                        Section {
+                            ForEach(pastSessions) { session in
+                                NavigationLink {
+                                    SessionDetailView(session: session)
+                                } label: {
+                                    SessionCard(session: session)
+                                }
+                                .listRowInsets(EdgeInsets(
+                                    top: DesignTokens.Spacing.xs,
+                                    leading: DesignTokens.Spacing.lg,
+                                    bottom: DesignTokens.Spacing.xs,
+                                    trailing: DesignTokens.Spacing.lg
+                                ))
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    Button(role: .destructive) {
+                                        deleteSession(session)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
+                                .swipeActions(edge: .leading) {
+                                    Button {
+                                        exportSession(session)
+                                    } label: {
+                                        Label("Export", systemImage: "square.and.arrow.up")
+                                    }
+                                    .tint(DesignTokens.Colors.accentPrimaryLight)
+                                }
+                                .accessibilityLabel("Session from \(session.startTime.formatted(date: .abbreviated, time: .omitted)), duration \(session.formattedDuration)")
+                            }
+                        } header: {
+                            Text("Recent Sessions")
+                                .font(DesignTokens.Typography.title2)
+                                .foregroundStyle(DesignTokens.Colors.textPrimary(for: colorScheme))
+                                .textCase(nil)
+                        }
+                    } else if !audioRecorder.hasActiveSession {
+                        Section {
+                            emptyState
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                        }
+                    }
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
 
                 // --- FAB (hidden while a session is active) ---
                 if !audioRecorder.hasActiveSession {
@@ -53,6 +98,7 @@ struct HomeView: View {
             }
             .background(DesignTokens.Colors.backgroundPrimary(for: colorScheme))
             .navigationTitle("FlowDoc")
+            .searchable(text: $searchText, prompt: "Search sessions")
             .toolbarBackground(
                 DesignTokens.Colors.backgroundPrimary(for: colorScheme),
                 for: .navigationBar
@@ -63,6 +109,7 @@ struct HomeView: View {
                         Image(systemName: "gearshape.fill")
                             .foregroundStyle(DesignTokens.Colors.textSecondary(for: colorScheme))
                     }
+                    .accessibilityLabel("Settings")
                 }
             }
         }
@@ -75,22 +122,23 @@ struct HomeView: View {
     // MARK: - FAB
 
     private var fab: some View {
-        Button(action: { audioRecorder.startRecording() }) {
-            HStack(spacing: DesignTokens.Spacing.sm) {
-                Image(systemName: "plus.circle.fill")
-                    .font(.title2)
-                Text("New Session")
-                    .font(DesignTokens.Typography.bodyMedium)
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, DesignTokens.Spacing.xl)
-            .padding(.vertical,   DesignTokens.Spacing.lg)
-            .background(DesignTokens.Colors.accentPrimary(for: colorScheme))
-            .cornerRadius(DesignTokens.CornerRadius.lg)
-            .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
+        Button(action: {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            audioRecorder.startRecording()
+        }) {
+            Image(systemName: "plus")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(DesignTokens.Colors.backgroundPrimaryLight) // cream text
+                .frame(width: 56, height: 56) // >44pt touch target
+                .background(DesignTokens.Colors.accentPrimary(for: colorScheme))
+                .clipShape(Circle())
+                .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+                .accessibilityLabel("New Session")
+                .accessibilityHint("Begins a new recording session")
         }
         .padding(.bottom, DesignTokens.Spacing.xl)
     }
+
 
     // MARK: - Empty state
 
@@ -107,6 +155,7 @@ struct HomeView: View {
                 .foregroundStyle(DesignTokens.Colors.textSecondary(for: colorScheme))
                 .multilineTextAlignment(.center)
         }
+        .frame(maxWidth: .infinity)
         .padding(.top,        100)
         .padding(.horizontal, DesignTokens.Spacing.xl)
     }
@@ -116,12 +165,24 @@ struct HomeView: View {
     private func loadSessions() {
         sessions = DatabaseManager.shared.fetchAllSessions()
     }
+
+    private func deleteSession(_ session: Session) {
+        UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+        DatabaseManager.shared.deleteSession(session.id)
+        loadSessions()
+    }
+
+    private func exportSession(_ session: Session) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        let segments = DatabaseManager.shared.fetchSegments(for: session.id)
+        let html = HTMLExporter.shared.generateHTML(session: session, segments: segments)
+        UIPasteboard.general.string = html
+    }
 }
 
 // MARK: - ActiveSessionCard
 
-/// Card shown while a session is in progress.  Displays the live timer and
-/// pause / stop controls.  Updates automatically as AudioRecorder publishes changes.
+/// Card shown while a session is in progress.
 struct ActiveSessionCard: View {
     @ObservedObject var audioRecorder: AudioRecorder
     @Environment(\.colorScheme) var colorScheme
@@ -147,6 +208,7 @@ struct ActiveSessionCard: View {
             HStack(spacing: DesignTokens.Spacing.md) {
                 pauseResumeButton
                 stopButton
+                cameraButton
             }
         }
         .padding(DesignTokens.Spacing.lg)
@@ -157,6 +219,8 @@ struct ActiveSessionCard: View {
             RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.lg)
                 .stroke(borderColor.opacity(0.3), lineWidth: 1.5)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Active session, \(audioRecorder.state == .recording ? "recording" : "paused"), elapsed time \(audioRecorder.formattedElapsedTime)")
     }
 
     // MARK: - Sub-views
@@ -173,7 +237,10 @@ struct ActiveSessionCard: View {
     }
 
     private var pauseResumeButton: some View {
-        Button(action: togglePause) {
+        Button(action: {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            togglePause()
+        }) {
             Label(
                 audioRecorder.state == .recording ? "Pause"  : "Resume",
                 systemImage: audioRecorder.state == .recording ? "pause.circle.fill" : "play.circle.fill"
@@ -182,15 +249,36 @@ struct ActiveSessionCard: View {
             .font(.title2)
             .foregroundStyle(DesignTokens.Colors.textPrimary(for: colorScheme))
         }
+        .accessibilityLabel(audioRecorder.state == .recording ? "Pause recording" : "Resume recording")
     }
 
     private var stopButton: some View {
-        Button(action: { audioRecorder.stopRecording() }) {
+        Button(action: {
+            UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+            audioRecorder.stopRecording()
+        }) {
             Label("Stop", systemImage: "stop.circle.fill")
                 .labelStyle(.iconOnly)
                 .font(.title2)
                 .foregroundStyle(DesignTokens.Colors.stateRecording(for: colorScheme))
         }
+        .accessibilityLabel("Stop recording")
+        .accessibilityHint("Ends the current recording session")
+    }
+
+    private var cameraButton: some View {
+        NavigationLink {
+            if let sessionID = audioRecorder.currentSession?.id {
+                CameraView(sessionID: sessionID)
+                    .environmentObject(audioRecorder)
+            }
+        } label: {
+            Label("Photo", systemImage: "camera.fill")
+                .labelStyle(.iconOnly)
+                .font(.title2)
+                .foregroundStyle(DesignTokens.Colors.textSecondary(for: colorScheme))
+        }
+        .accessibilityLabel("Take photo")
     }
 
     // MARK: - Helpers
