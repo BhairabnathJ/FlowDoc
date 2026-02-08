@@ -38,9 +38,9 @@ struct CircuitCameraView: View {
     private var statsBar: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Wires: \(manager.wireCount)")
+                Text("Tracked: \(manager.wireCount)")
                     .font(DesignTokens.Typography.bodyMedium)
-                Text(manager.isDetecting ? "Detecting..." : "Idle")
+                Text("IDs: \(manager.trackedWireIDs.count) stable")
                     .font(DesignTokens.Typography.small)
             }
             .foregroundStyle(.white)
@@ -91,6 +91,7 @@ struct CircuitCameraView: View {
 /// Manages the AVCaptureSession, runs wire detection, and tracks wires across frames.
 class CircuitCameraManager: NSObject, ObservableObject {
     @Published var wireCount: Int = 0
+    @Published var trackedWireIDs: [UUID] = []
     @Published var fps: Double = 0.0
     @Published var isDetecting: Bool = false
     @Published var isRunning: Bool = false
@@ -203,6 +204,7 @@ extension CircuitCameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 )
                 let tracked = await self.tracker.updateTracking(with: contours)
                 self.wireCount = tracked.count
+                self.trackedWireIDs = tracked.map(\.id)
 
                 // FPS calculation
                 self.frameCount += 1
