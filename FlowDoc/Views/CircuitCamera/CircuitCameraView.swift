@@ -18,6 +18,14 @@ struct CircuitCameraView: View {
                 if manager.isRunning {
                     CameraPreviewView(session: manager.captureSession)
                         .ignoresSafeArea()
+
+                    // Wire detection overlay
+                    WireOverlayView(
+                        trackedWires: manager.trackedWires,
+                        mappedConnections: manager.mappedConnections,
+                        viewSize: proxy.size
+                    )
+                    .ignoresSafeArea()
                 }
 
                 // Calibration corner dots
@@ -193,6 +201,7 @@ struct CircuitCameraView: View {
 class CircuitCameraManager: NSObject, ObservableObject {
     @Published var wireCount: Int = 0
     @Published var trackedWireIDs: [UUID] = []
+    @Published var trackedWires: [TrackedWire] = []
     @Published var mappedConnections: [MappedConnection] = []
     @Published var isCalibrated: Bool = false
     @Published var fps: Double = 0.0
@@ -340,6 +349,7 @@ extension CircuitCameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                     timestamp: timestamp
                 )
                 let tracked = await self.tracker.updateTracking(with: contours)
+                self.trackedWires = tracked
                 self.wireCount = tracked.count
                 self.trackedWireIDs = tracked.map(\.id)
 
